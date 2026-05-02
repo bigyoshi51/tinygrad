@@ -1,7 +1,7 @@
 import unittest
 from tinygrad import Tensor, dtypes
 from tinygrad.helpers import Context
-from tinygrad.uop.ops import Ops
+from tinygrad.uop.ops import Ops, UOp
 
 class TestRingAllReduce(unittest.TestCase):
   def test_schedule_ring(self):
@@ -24,6 +24,16 @@ class TestRingAllReduce(unittest.TestCase):
       t = Tensor.ones(N, N*100).contiguous().shard(ds, axis=0).realize()
       out = t.sum(0)
       self.assertListEqual(out.tolist(), [4]*N*100)
+
+  def test_shrink_allreduce_before_copies(self):
+    ds = tuple(f"CPU:{i}" for i in range(2))
+    with Context(RING=0, SCACHE=0):
+      t = Tensor.ones(4, 4).shard(ds, axis=None)
+      self.assertEqual(Tensor(UOp.allreduce(t.uop, Ops.ADD, t.device)).shrink(((0, 2), (0, 4))).tolist(), [[2]*4, [2]*4])
+      t = Tensor.empty(4, 4).shard(ds, axis=None)
+      out = Tensor(UOp.allreduce(t.uop, Ops.ADD, t.device)).shrink(((0, 2), (0, 4))).contiguous()
+      copies = [si.src[1].shape for si in out.linear_with_vars()[0].src if si.src[0].op is Ops.COPY]
+      self.assertEqual(set(copies), {(8,)})
 
 class TestAllreduceCast(unittest.TestCase):
   def _get_copy_dtypes(self, dtype, allreduce_cast):

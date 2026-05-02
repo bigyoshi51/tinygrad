@@ -5,6 +5,12 @@ from tinygrad.schedule.allreduce import handle_allreduce
 
 # ***** multi rewrite MSELECT/MSTACK *****
 
+def _has_define_var(x:UOp) -> bool: return any(v.op is Ops.DEFINE_VAR for v in x.toposort())
+
+def shrink_allreduce(shrink:UOp, red:UOp):
+  if any(isinstance(x, UOp) and _has_define_var(x) for ss in shrink.marg for x in ss): return None
+  return red.src[0].shrink(shrink.marg).allreduce(red.arg, red.src[1])
+
 def mstack_early_shrink(ms:UOp, shrink:UOp):
   ret:list[UOp] = []
   def apply_shrink(s:UOp, i:int) -> UOp:
@@ -19,6 +25,7 @@ def mstack_early_shrink(ms:UOp, shrink:UOp):
   return ms.replace(src=tuple(ret))
 
 replace_allreduce = PatternMatcher([
+  (UPat(Ops.SHRINK, src=(UPat(Ops.ALLREDUCE, name="red"), UPat(), UPat()), name="shrink"), shrink_allreduce),
   # BROADCAST: explicitly expand broadcast copies and combine with MSTACK
   (UPat(Ops.COPY, name="c", src=(UPat(GroupOp.All-{Ops.CONST}, name="x"), UPat(Ops.DEVICE))), lambda c,x:
     UOp(Ops.MSTACK, c.dtype, tuple(x.copy_to_device(d) for d in c.device)) if isinstance(c.device, tuple) and isinstance(x.device, str) else None),
