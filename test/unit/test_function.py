@@ -2,7 +2,7 @@ import numpy as np
 import unittest
 from tinygrad.function import function
 from tinygrad import Tensor, GlobalCounters
-from tinygrad.uop.ops import UOp, KernelInfo
+from tinygrad.uop.ops import Ops, UOp, KernelInfo
 
 class TestFunction(unittest.TestCase):
   def test_simple(self):
@@ -277,6 +277,26 @@ class TestFunctionMulti(unittest.TestCase):
     x = Tensor([[1.,2.],[3.,4.],[5.,6.],[7.,8.]]).shard(self.devices_2, axis=0)
     w = Tensor([[1.,0.],[0.,1.]]).shard(self.devices_2, axis=None)
     np.testing.assert_allclose(f(x, w).numpy(), [[1.,2.],[3.,4.],[5.,6.],[7.,8.]])
+
+  def test_matmul_axis_mismatch_does_not_copy_expanded_outer(self):
+    N = 16
+    out = Tensor.empty(N, N).shard(self.devices_2, axis=0) @ Tensor.empty(N, N).shard(self.devices_2, axis=0)
+    copy_shapes = [si.src[1].shape for si in out.linear_with_vars()[0].src if si.src[0].op is Ops.COPY]
+    self.assertNotIn((N*N*N,), copy_shapes)
+    self.assertIn((N*N,), copy_shapes)
+    rng = np.random.default_rng(0)
+    x, w = rng.standard_normal((N, N), dtype=np.float32)/10, rng.standard_normal((N, N), dtype=np.float32)/10
+    out = Tensor(x).realize().shard(self.devices_2, axis=0) @ Tensor(w).realize().shard(self.devices_2, axis=0)
+    np.testing.assert_allclose(out.numpy(), x @ w, atol=1e-5)
+
+  def test_matmul_multi_axis_correctness(self):
+    rng = np.random.default_rng(1)
+    x, w = rng.standard_normal((8, 8), dtype=np.float32)/10, rng.standard_normal((8, 8), dtype=np.float32)/10
+    for x_axis in (None, 0, 1):
+      for w_axis in (None, 0, 1):
+        with self.subTest(x_axis=x_axis, w_axis=w_axis):
+          out = Tensor(x).realize().shard(self.devices_2, axis=x_axis) @ Tensor(w).realize().shard(self.devices_2, axis=w_axis)
+          np.testing.assert_allclose(out.numpy(), x @ w, atol=1e-5)
 
   def test_grad_implicit_multi(self):
     w = Tensor([1., 2., 3., 4.], requires_grad=True).shard(self.devices_2, axis=None)

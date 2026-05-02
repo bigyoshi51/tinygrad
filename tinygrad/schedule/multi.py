@@ -59,8 +59,17 @@ def alu_multi(root:UOp):
         # same axis, just copy through
         srcs.append(mlb.src[0])
       else:
-        # axis mismatch, copy to all devices, and shard it correctly
-        srcs.append(copy_multi(mlb, mlb.device)._shard(axis))
+        gathered: UOp | None = None
+        src0 = mlb.src[0]
+        if src0.op is Ops.EXPAND:
+          pre = src0.src[0]
+          try:
+            if prod(pre.shape) < prod(src0.shape) and pre.shape[mlb.axis] == src0.shape[mlb.axis]:
+              gathered_small = copy_multi(pre.multi(mlb.axis), mlb.device)
+              new_shape = tuple(src0.shape[i] if pre.shape[i] == 1 else gathered_small.shape[i] for i in range(len(pre.shape)))
+              gathered = gathered_small.expand(new_shape)._shard(axis)
+          except Exception: gathered = None
+        srcs.append(gathered if gathered is not None else copy_multi(mlb, mlb.device)._shard(axis))
   return srcs[0].alu(root.op, *srcs[1:]).multi(axis)
 
 def reduce_multi(root:UOp, multi:UOp):
