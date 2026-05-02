@@ -2,7 +2,7 @@ import numpy as np
 import unittest
 from tinygrad.function import function
 from tinygrad import Tensor, GlobalCounters
-from tinygrad.uop.ops import UOp, KernelInfo
+from tinygrad.uop.ops import Ops, UOp, KernelInfo
 
 class TestFunction(unittest.TestCase):
   def test_simple(self):
@@ -277,6 +277,23 @@ class TestFunctionMulti(unittest.TestCase):
     x = Tensor([[1.,2.],[3.,4.],[5.,6.],[7.,8.]]).shard(self.devices_2, axis=0)
     w = Tensor([[1.,0.],[0.,1.]]).shard(self.devices_2, axis=None)
     np.testing.assert_allclose(f(x, w).numpy(), [[1.,2.],[3.,4.],[5.,6.],[7.,8.]])
+
+  def test_reduce_add_different_shard_axes(self):
+    N = 16
+    out = (Tensor.empty(N, N).shard(self.devices_2, axis=0) + Tensor.empty(N, N).shard(self.devices_2, axis=1)).sum(axis=0)
+    copy_shapes = [si.src[1].shape for si in out.linear_with_vars()[0].src if si.src[0].op is Ops.COPY]
+    self.assertNotIn((N*N,), copy_shapes)
+    self.assertIn((N,), copy_shapes)
+    out = (Tensor.empty(N, N).shard(self.devices_2, axis=0) + Tensor.empty(N, N).shard(self.devices_2, axis=1)).sum()
+    copy_shapes = [si.src[1].shape for si in out.linear_with_vars()[0].src if si.src[0].op is Ops.COPY]
+    self.assertNotIn((N*N,), copy_shapes)
+    self.assertIn((1,), copy_shapes)
+    rng = np.random.default_rng(0)
+    x, y = rng.standard_normal((N, N), dtype=np.float32), rng.standard_normal((N, N), dtype=np.float32)
+    out = (Tensor(x).realize().shard(self.devices_2, axis=0) + Tensor(y).realize().shard(self.devices_2, axis=1)).sum(axis=0)
+    np.testing.assert_allclose(out.numpy(), (x+y).sum(axis=0), atol=1e-5)
+    out = (Tensor(x).realize().shard(self.devices_2, axis=0) + Tensor(y).realize().shard(self.devices_2, axis=1)).sum()
+    np.testing.assert_allclose(out.numpy(), (x+y).sum(), atol=1e-5)
 
   def test_grad_implicit_multi(self):
     w = Tensor([1., 2., 3., 4.], requires_grad=True).shard(self.devices_2, axis=None)

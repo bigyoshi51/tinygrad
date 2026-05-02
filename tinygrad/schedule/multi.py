@@ -39,6 +39,13 @@ _early_allreduce = PatternMatcher([
 ])
 if not getenv("LATE_ALLREDUCE", 1): replace_allreduce = _early_allreduce + replace_allreduce
 
+def _has_multi(u:UOp) -> bool: return any(x.op is Ops.MULTI for x in u.toposort())
+
+pm_reduce_add = PatternMatcher([
+  (UPat(Ops.REDUCE, src=(UPat(Ops.ADD, src=(UPat.var("x"), UPat.var("y"))),), name="r"),
+   lambda x, y, r: x._rop(r.arg[0], r.arg[1]) + y._rop(r.arg[0], r.arg[1]) if r.arg[0] is Ops.ADD and _has_multi(r.src[0]) else None),
+])
+
 # ***** multi functions *****
 
 def alu_multi(root:UOp):
