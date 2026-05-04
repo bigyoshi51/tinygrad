@@ -2,6 +2,7 @@
 import itertools
 from tinygrad.helpers import dedup, flatten, getenv, unwrap, FUSE_OPTIM
 from tinygrad.tensor import Tensor
+from tinygrad.uop import Ops
 from tinygrad.dtype import dtypes, least_upper_dtype, to_dtype
 
 class Optimizer:
@@ -35,6 +36,16 @@ class Optimizer:
     Zeroes the gradients of all the parameters.
     """
     for param in self.params: param.grad = None
+
+  def realize_grads(self, split_adds=False, min_bytes:int=16_000_000):
+    for p in self.params:
+      if p.grad is None: continue
+      if split_adds and p.grad.uop.op is Ops.ADD and p.grad.nbytes() >= min_bytes:
+        srcs = list(p.grad.uop.src)
+        p.grad = Tensor(srcs[0], device=p.device).realize()
+        for src in srcs[1:]: p.grad.assign(p.grad + Tensor(src, device=p.device)).realize()
+      else:
+        p.grad.realize()
 
   def step(self):
     """
