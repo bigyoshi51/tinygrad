@@ -142,6 +142,24 @@ class TestOptim(unittest.TestCase):
 
       np.testing.assert_allclose(losses[0], losses[1], atol=1e-4, rtol=0)
 
+  def test_realize_grads_split_tied_vocab(self):
+    def run(split):
+      rng = np.random.default_rng(0)
+      V,D,B,T = 32,16,2,3
+      w = Tensor(rng.standard_normal((V,D), dtype=np.float32), requires_grad=True)
+      tokens = Tensor(rng.integers(0, V, size=(B,T), dtype=np.int32))
+      targets = Tensor(rng.integers(0, V, size=(B,T), dtype=np.int32))
+      emb = (Tensor.arange(V, requires_grad=False) == tokens.unsqueeze(-1)).unsqueeze(-1).where(w, 0).sum(-2)
+      logits = emb.linear(w.transpose())
+      loss = logits.log_softmax(-1).gather(-1, targets.unsqueeze(-1)).squeeze(-1).mean() * -1.0
+      opt = SGD([w], lr=0.01)
+      opt.zero_grad()
+      loss.backward()
+      if split: opt.realize_grads(split_adds=True, split_vocab=8, min_bytes=1)
+      opt.step()
+      return w.numpy()
+    np.testing.assert_allclose(run(False), run(True), atol=0, rtol=0)
+
   @unittest.skipUnless(is_dtype_supported(dtypes.half), "need half")
   def test_mixed_precision(self):
     old_default_float, dtypes.default_float = dtypes.default_float, dtypes.half

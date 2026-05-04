@@ -6,6 +6,7 @@ from tinygrad.uop import Ops
 from tinygrad.dtype import dtypes, least_upper_dtype, to_dtype
 
 def _chunked_vocab_grad(src, grad:Tensor, chunk:int) -> bool:
+  if grad.uop.axis is not None: return False
   try:
     red = src.src[0].src[0].src[0].src[0]
     mul = red.src[0]
@@ -58,6 +59,9 @@ class Optimizer:
       if p.grad is None: continue
       if split_adds and p.grad.uop.op is Ops.ADD and p.grad.nbytes() >= min_bytes:
         srcs = list(p.grad.uop.src)
+        if len({s.axis for s in srcs}) != 1:
+          p.grad.realize()
+          continue
         if split_vocab and len(srcs) == 2:
           dense = next((s for s in srcs if s.op is Ops.PERMUTE), None)
           other = next((s for s in srcs if s is not dense), None)
