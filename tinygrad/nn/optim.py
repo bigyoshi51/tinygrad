@@ -5,6 +5,22 @@ from tinygrad.tensor import Tensor
 from tinygrad.uop import Ops
 from tinygrad.dtype import dtypes, least_upper_dtype, to_dtype
 
+def _chunked_vocab_grad(src, grad:Tensor, chunk:int) -> bool:
+  try:
+    red = src.src[0].src[0].src[0].src[0]
+    mul = red.src[0]
+    h, dl = Tensor(mul.src[0].src[0].src[0], device=grad.device), Tensor(mul.src[1].src[0].src[0], device=grad.device)
+  except (IndexError, AttributeError):
+    return False
+  if src.op is not Ops.PERMUTE or red.op is not Ops.REDUCE or red.arg != (Ops.ADD, (0, 1)) or mul.op is not Ops.MUL: return False
+  if h.ndim != 3 or dl.ndim != 3 or grad.ndim != 2 or h.shape[:2] != dl.shape[:2] or grad.shape != (dl.shape[2], h.shape[2]): return False
+  for lo in range(0, grad.shape[0], chunk):
+    hi = min(grad.shape[0], lo+chunk)
+    B,T,D,C = h.shape[0], h.shape[1], h.shape[2], hi-lo
+    dense_chunk = (h.reshape(B,T,1,D).expand(B,T,C,D) * dl[:, :, lo:hi].reshape(B,T,C,1).expand(B,T,C,D)).sum(axis=(0,1))
+    grad[lo:hi].assign(grad[lo:hi] + dense_chunk).realize()
+  return True
+
 class Optimizer:
   """
   Base class for all optimizers.
@@ -37,11 +53,17 @@ class Optimizer:
     """
     for param in self.params: param.grad = None
 
-  def realize_grads(self, split_adds=False, min_bytes:int=16_000_000):
+  def realize_grads(self, split_adds=False, split_vocab:int=0, min_bytes:int=16_000_000):
     for p in self.params:
       if p.grad is None: continue
       if split_adds and p.grad.uop.op is Ops.ADD and p.grad.nbytes() >= min_bytes:
         srcs = list(p.grad.uop.src)
+        if split_vocab and len(srcs) == 2:
+          dense = next((s for s in srcs if s.op is Ops.PERMUTE), None)
+          other = next((s for s in srcs if s is not dense), None)
+          if dense is not None and other is not None:
+            p.grad = Tensor(other, device=p.device).realize()
+            if _chunked_vocab_grad(dense, p.grad, split_vocab): continue
         p.grad = Tensor(srcs[0], device=p.device).realize()
         for src in srcs[1:]: p.grad.assign(p.grad + Tensor(src, device=p.device)).realize()
       else:
