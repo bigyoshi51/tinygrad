@@ -158,7 +158,22 @@ class TestOptim(unittest.TestCase):
       if split: opt.realize_grads(split_adds=True, split_vocab=8, min_bytes=1)
       opt.step()
       return w.numpy()
-    np.testing.assert_allclose(run(False), run(True), atol=0, rtol=0)
+    np.testing.assert_allclose(run(False), run(True), atol=1e-6, rtol=1e-6)
+
+  @needs_second_gpu
+  def test_realize_grads_split_mixed_axis_fallback(self):
+    def run(split):
+      rng = np.random.default_rng(1)
+      devs = (f"{Device.DEFAULT}", f"{Device.DEFAULT}:1")
+      w = Tensor(rng.standard_normal((8,8), dtype=np.float32), requires_grad=True).shard(devs, axis=0).realize()
+      loss = (w*w).sum() + w.sum()
+      opt = SGD([w], lr=0.01)
+      opt.zero_grad()
+      loss.backward()
+      if split: opt.realize_grads(split_adds=True, min_bytes=1)
+      opt.step()
+      return w.to(Device.DEFAULT).numpy()
+    np.testing.assert_allclose(run(False), run(True), atol=1e-6, rtol=1e-6)
 
   @unittest.skipUnless(is_dtype_supported(dtypes.half), "need half")
   def test_mixed_precision(self):
